@@ -14,7 +14,7 @@ from typing import NamedTuple
 import torch
 import torch.nn as nn
 
-from . import _C
+from . import _C  # noqa
 
 
 def cpu_deep_copy_tuple(input_tuple):

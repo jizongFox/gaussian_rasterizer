@@ -372,7 +372,7 @@ __global__ void preprocessCUDA(
 	float3 m = means[idx];
 
 	// Taking care of gradients from the screenspace points
-	float4 m_hom = transformPoint4x4(m, proj);
+	float4 m_hom = transformPoint4x4(m, proj); // in ndc space
 	float m_w = 1.0f / (m_hom.w + 0.0000001f);
 
 	// Compute loss gradient w.r.t. 3D means due to gradients of 2D means
@@ -390,6 +390,7 @@ __global__ void preprocessCUDA(
 
 	// the w must be equal to 1 for view^T * [x,y,z,1]
 	float3 m_view = transformPoint4x3(m, view);
+	// in camera space
 	
 	// Compute loss gradient w.r.t. 3D means due to gradients of depth
 	// from rendering procedure
@@ -398,7 +399,10 @@ __global__ void preprocessCUDA(
 	dL_dmean2.x = (view[2] - view[3] * mul3) * dL_ddepth[idx];
 	dL_dmean2.y = (view[6] - view[7] * mul3) * dL_ddepth[idx];
 	dL_dmean2.z = (view[10] - view[11] * mul3) * dL_ddepth[idx];
-	
+	// but view[3], view[7] and view[11] is zero?
+	//std::cout << view[3] << " " << view[7] << " " << view[11] << std::endl;
+
+
 	// That's the third part of the mean gradient.
 	dL_dmeans[idx] += dL_dmean2;
 

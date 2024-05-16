@@ -15,24 +15,30 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 os.path.dirname(os.path.abspath(__file__))
-
+package_name = "diff_gaussian_rasterization_depth"
 setup(
-    name="gaussian_rasterizer",
-    packages=['gaussian_rasterizer'],
+    name=package_name,
+    packages=[package_name],
     version="1.0.0",
     ext_modules=[
         CUDAExtension(
-            name="gaussian_rasterizer._C",
+            name=f"{package_name}._C",
             sources=[
                 "cuda_rasterizer/rasterizer_impl.cu",
                 "cuda_rasterizer/forward.cu",
                 "cuda_rasterizer/backward.cu",
                 "rasterize_points.cu",
-                "ext.cpp"],
-            extra_compile_args={"nvcc": ["-I" + os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                             "third_party/glm/")]})
+                "ext.cpp",
+            ],
+            extra_compile_args={
+                "nvcc": [
+                    "-I"
+                    + os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "third_party/glm/"
+                    )
+                ]
+            },
+        )
     ],
-    cmdclass={
-        'build_ext': BuildExtension
-    }
+    cmdclass={"build_ext": BuildExtension},
 )

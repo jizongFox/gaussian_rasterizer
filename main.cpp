@@ -120,10 +120,11 @@ void runBackward(const std::filesystem::path args_path)
     const torch::Tensor binningBuffer = load_tensor(args_path / "binningBuffer.pt").to(torch::kCUDA);
     const torch::Tensor imgBuffer = load_tensor(args_path / "imgBuffer.pt").to(torch::kCUDA);
     const bool debug = load_scalar<bool>(args_path / "debug.pt");
-    torch::Tensor dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations;
+    const torch::Tensor proj_k = load_tensor(args_path / "proj_k.pt").to(torch::kCUDA);
+    torch::Tensor dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations, dL_dcamera;
 
     printTensorInfo(viewmatrix, true);
-    std::tie(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations) = RasterizeGaussiansBackwardCUDA(
+    std::tie(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations, dL_dcamera) = RasterizeGaussiansBackwardCUDA(
         background,
         means3D,
         radii,
@@ -134,6 +135,7 @@ void runBackward(const std::filesystem::path args_path)
         cov3D_precomp,
         viewmatrix,
         projmatrix,
+        proj_k,
         tanfovx,
         tanfovy,
         grad_color,

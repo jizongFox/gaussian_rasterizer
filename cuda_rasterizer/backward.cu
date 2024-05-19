@@ -150,7 +150,9 @@ __global__ void computeCov2DCUDA(int P,
 	const float* view_matrix,
 	const float* dL_dconics,
 	float3* dL_dmeans,
-	float* dL_dcov)
+	float* dL_dcov,
+    float4* dL_dcamerapose
+    )
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -271,6 +273,33 @@ __global__ void computeCov2DCUDA(int P,
 	// that is caused because the mean affects the covariance matrix.
 	// Additional mean gradient is accumulated in BACKWARD::preprocess.
 	dL_dmeans[idx] = dL_dmean;
+
+    //iComMa: Compute the gradient of the camera pose
+    glm::vec3 dl_dt = glm::vec3(dL_dtx, dL_dty, dL_dtz);
+    glm::mat3x3 dL_dC = glm::outerProduct(dl_dt,glm::vec3( mean.x, mean.y, mean.z ));
+    dL_dC[0][0] += J[0][0] * dL_dT00;
+    dL_dC[0][1] += J[1][1] * dL_dT10;
+    dL_dC[0][2] += J[0][2] * dL_dT00 + J[1][2] * dL_dT10;
+    dL_dC[1][0] += J[0][0] * dL_dT01;
+    dL_dC[1][1] += J[1][1] * dL_dT11;
+    dL_dC[1][2] += J[0][2] * dL_dT01 + J[1][2] * dL_dT11;
+    dL_dC[2][0] += J[0][0] * dL_dT02;
+    dL_dC[2][1] += J[1][1] * dL_dT12;
+    dL_dC[2][2] += J[0][2] * dL_dT02 + J[1][2] * dL_dT12;
+
+    atomicAdd(&dL_dcamerapose[0].x, dL_dC[0][0]);
+    atomicAdd(&dL_dcamerapose[0].y, dL_dC[0][1]);
+    atomicAdd(&dL_dcamerapose[0].z, dL_dC[0][2]);
+    atomicAdd(&dL_dcamerapose[1].x, dL_dC[1][0]);
+    atomicAdd(&dL_dcamerapose[1].y, dL_dC[1][1]);
+    atomicAdd(&dL_dcamerapose[1].z, dL_dC[1][2]);
+    atomicAdd(&dL_dcamerapose[2].x, dL_dC[2][0]);
+    atomicAdd(&dL_dcamerapose[2].y, dL_dC[2][1]);
+    atomicAdd(&dL_dcamerapose[2].z, dL_dC[2][2]);
+    atomicAdd(&dL_dcamerapose[3].x, dL_dtx);
+    atomicAdd(&dL_dcamerapose[3].y, dL_dty);
+    atomicAdd(&dL_dcamerapose[3].z, dL_dtz);
+
 }
 
 // Backward pass for the conversion of scale and rotation to a 
@@ -355,6 +384,7 @@ __global__ void preprocessCUDA(
 	const float scale_modifier,
 	const float* view,
 	const float* proj,
+    const float* proj_k,
 	const glm::vec3* campos,
 	const float3* dL_dmean2D,
 	glm::vec3* dL_dmeans,
@@ -363,7 +393,9 @@ __global__ void preprocessCUDA(
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot,
+    float4* dL_dcamerapose
+    )
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P || !(radii[idx] > 0))
@@ -413,6 +445,42 @@ __global__ void preprocessCUDA(
 	// Compute gradient updates due to computing covariance from scale/rotation
 	if (scales)
 		computeCov3D(idx, scales[idx], scale_modifier, rotations[idx], dL_dcov3D, dL_dscale, dL_drot);
+
+    //iComMa: Compute the gradient of the camera pose
+    float a = dL_dmean2D[idx].x * m_w;
+    float b = dL_dmean2D[idx].y * m_w;
+    float c = - dL_dmean2D[idx].x * m_hom.x * m_w * m_w - dL_dmean2D[idx].y * m_hom.y * m_w * m_w;
+
+    glm::vec3 dL_dPv = glm::vec3(a, b, c);
+    glm::mat3x3 dL_dPM = glm::outerProduct(dL_dPv,glm::vec3(m.x, m.y, m.z));
+    // this does not consider the principle point and thus the gradient is wrong.
+//    std::printf(proj_k[0]);
+//	std::printf(proj_k[5]);
+//	std::printf(proj_k[11]);
+
+    float k0 = proj_k[0];
+    float k1 = proj_k[5];
+    float k2 = proj_k[11];
+
+    atomicAdd(&dL_dcamerapose[0].x, dL_dPM[0][0] * k0);
+    atomicAdd(&dL_dcamerapose[0].y, dL_dPM[0][1] * k1);
+    atomicAdd(&dL_dcamerapose[0].z, dL_dPM[0][2] * k2);
+    atomicAdd(&dL_dcamerapose[1].x, dL_dPM[1][0] * k0);
+    atomicAdd(&dL_dcamerapose[1].y, dL_dPM[1][1] * k1);
+    atomicAdd(&dL_dcamerapose[1].z, dL_dPM[1][2] * k2);
+    atomicAdd(&dL_dcamerapose[2].x, dL_dPM[2][0] * k0);
+    atomicAdd(&dL_dcamerapose[2].y, dL_dPM[2][1] * k1);
+    atomicAdd(&dL_dcamerapose[2].z, dL_dPM[2][2] * k2);
+    atomicAdd(&dL_dcamerapose[3].x, dL_dPv[0] * k0);
+    atomicAdd(&dL_dcamerapose[3].y, dL_dPv[1] * k1);
+    atomicAdd(&dL_dcamerapose[3].z, dL_dPv[2] * k2);
+
+    // added depth gradient
+    // to verify by jizong Peng
+    atomicAdd(&dL_dcamerapose[0].z, dL_ddepth[idx] * m.x);
+    atomicAdd(&dL_dcamerapose[1].z, dL_ddepth[idx] * m.y);
+    atomicAdd(&dL_dcamerapose[2].z, dL_ddepth[idx] * m.z);
+    atomicAdd(&dL_dcamerapose[3].z, dL_ddepth[idx] * 1.0f);
 }
 
 // Backward version of the rendering procedure.
@@ -607,6 +675,7 @@ void BACKWARD::preprocess(
 	const float* cov3Ds,
 	const float* viewmatrix,
 	const float* projmatrix,
+    const float* proj_k,
 	const float focal_x, float focal_y,
 	const float tan_fovx, float tan_fovy,
 	const glm::vec3* campos,
@@ -618,13 +687,14 @@ void BACKWARD::preprocess(
 	float* dL_dcov3D,
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
-	glm::vec4* dL_drot)
+	glm::vec4* dL_drot,
+    float4* dL_dcamerapose)
 {
 	// Propagate gradients for the path of 2D conic matrix computation. 
 	// Somewhat long, thus it is its own kernel rather than being part of 
 	// "preprocess". When done, loss gradient w.r.t. 3D means has been
 	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
-	computeCov2DCUDA << <(P + 255) / 256, 256 >> > (
+	computeCov2DCUDA <<<(P + 255) / 256, 256 >>> (
 		P,
 		means3D,
 		radii,
@@ -636,12 +706,13 @@ void BACKWARD::preprocess(
 		viewmatrix,
 		dL_dconic,
 		(float3*)dL_dmean3D,
-		dL_dcov3D);
+		dL_dcov3D,
+        dL_dcamerapose);
 
 	// Propagate gradients for remaining steps: finish 3D mean gradients,
 	// propagate color gradients to SH (if desireD), propagate 3D covariance
 	// matrix gradients to scale and rotation.
-	preprocessCUDA<NUM_CHANNELS> << < (P + 255) / 256, 256 >> > (
+	preprocessCUDA<NUM_CHANNELS> <<< (P + 255) / 256, 256 >>> (
 		P, D, M,
 		(float3*)means3D,
 		radii,
@@ -652,6 +723,7 @@ void BACKWARD::preprocess(
 		scale_modifier,
 		viewmatrix,
 		projmatrix,
+        proj_k,
 		campos,
 		(float3*)dL_dmean2D,
 		(glm::vec3*)dL_dmean3D,
@@ -660,7 +732,8 @@ void BACKWARD::preprocess(
 		dL_dcov3D,
 		dL_dsh,
 		dL_dscale,
-		dL_drot);
+		dL_drot,
+        dL_dcamerapose);
 }
 
 void BACKWARD::render(
@@ -684,7 +757,7 @@ void BACKWARD::render(
 	float* dL_dcolors,
 	float* dL_ddepths)
 {
-	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
+	renderCUDA<NUM_CHANNELS> <<<grid, block >>>(
 		ranges,
 		point_list,
 		W, H,

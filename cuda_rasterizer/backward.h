@@ -53,6 +53,7 @@ namespace BACKWARD
 		const float* cov3Ds,
 		const float* view,
 		const float* proj,
+        const float* proj_k,
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		const glm::vec3* campos,
@@ -64,7 +65,8 @@ namespace BACKWARD
 		float* dL_dcov3D,
 		float* dL_dsh,
 		glm::vec3* dL_dscale,
-		glm::vec4* dL_drot);
+		glm::vec4* dL_drot,
+        float4* dL_dcamerapose);
 }
 
 #endif

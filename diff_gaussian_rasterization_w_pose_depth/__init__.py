@@ -9,10 +9,10 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
-from typing import NamedTuple
-
 import torch
 import torch.nn as nn
+from torch import Tensor
+from typing import NamedTuple
 
 from . import _C  # noqa
 
@@ -35,6 +35,8 @@ def rasterize_gaussians(
     rotations,
     cov3Ds_precomp,
     raster_settings,
+    camera_center: Tensor,
+    camera_pose: Tensor,
 ):
     return _RasterizeGaussians.apply(
         means3D,
@@ -46,6 +48,8 @@ def rasterize_gaussians(
         rotations,
         cov3Ds_precomp,
         raster_settings,
+        camera_center,
+        camera_pose,
     )
 
 
@@ -62,6 +66,8 @@ class _RasterizeGaussians(torch.autograd.Function):
         rotations,
         cov3Ds_precomp,
         raster_settings,
+        camera_center,
+        camera_pose,
     ):
 
         # Restructure arguments the way that the C++ lib expects them
@@ -82,7 +88,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.image_width,
             sh,
             raster_settings.sh_degree,
-            raster_settings.campos,
+            camera_center,
             raster_settings.prefiltered,
             raster_settings.debug,
         )
@@ -134,6 +140,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             geomBuffer,
             binningBuffer,
             imgBuffer,
+            camera_center,
+            camera_pose,
             alpha,
         )
         return color, depth, alpha, radii
@@ -155,6 +163,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             geomBuffer,
             binningBuffer,
             imgBuffer,
+            camera_center,
+            camera_pose,
             alpha,
         ) = ctx.saved_tensors
 
@@ -170,6 +180,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             cov3Ds_precomp,
             raster_settings.viewmatrix,
             raster_settings.projmatrix,
+            raster_settings.proj_k,
             raster_settings.tanfovx,
             raster_settings.tanfovy,
             grad_out_color,
@@ -177,7 +188,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_out_alpha,
             sh,
             raster_settings.sh_degree,
-            raster_settings.campos,
+            camera_center,
             geomBuffer,
             num_rendered,
             binningBuffer,
@@ -200,6 +211,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     grad_sh,
                     grad_scales,
                     grad_rotations,
+                    grad_camera_pose,
                 ) = _C.rasterize_gaussians_backward(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_bw.dump")
@@ -217,6 +229,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 grad_sh,
                 grad_scales,
                 grad_rotations,
+                grad_camera_pose,
             ) = _C.rasterize_gaussians_backward(*args)
 
         grads = (
@@ -229,6 +242,8 @@ class _RasterizeGaussians(torch.autograd.Function):
             grad_rotations,
             grad_cov3Ds_precomp,
             None,
+            None,
+            grad_camera_pose,
         )
 
         return grads
@@ -243,6 +258,7 @@ class GaussianRasterizationSettings(NamedTuple):
     scale_modifier: float
     viewmatrix: torch.Tensor
     projmatrix: torch.Tensor
+    proj_k: torch.Tensor
     sh_degree: int
     campos: torch.Tensor
     prefiltered: bool
@@ -274,6 +290,8 @@ class GaussianRasterizer(nn.Module):
         scales=None,
         rotations=None,
         cov3D_precomp=None,
+        camera_center=None,
+        camera_pose=None,
     ):
 
         raster_settings = self.raster_settings
@@ -303,7 +321,10 @@ class GaussianRasterizer(nn.Module):
             rotations = torch.Tensor([])
         if cov3D_precomp is None:
             cov3D_precomp = torch.Tensor([])
-
+        if camera_center is None:
+            camera_center = torch.Tensor([])
+        if camera_pose is None:
+            camera_pose = torch.Tensor([])
         # Invoke C++/CUDA rasterization routine
         return rasterize_gaussians(
             means3D,
@@ -315,4 +336,6 @@ class GaussianRasterizer(nn.Module):
             rotations,
             cov3D_precomp,
             raster_settings,
+            camera_center,
+            camera_pose,
         )

@@ -15,7 +15,7 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
 os.path.dirname(os.path.abspath(__file__))
-package_name = "diff_gaussian_rasterization_depth"
+package_name = "diff_gaussian_rasterization_w_pose_depth"
 setup(
     name=package_name,
     packages=[package_name],

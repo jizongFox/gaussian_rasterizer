@@ -11,6 +11,7 @@ warnings.simplefilter("ignore")
 
 args = torch.load("snapshot_fw.dump")
 args = [x.cuda() if isinstance(x, Tensor) else x for x in args]
+
 (
     num_rendered,
     color,
@@ -22,5 +23,5 @@ args = [x.cuda() if isinstance(x, Tensor) else x for x in args]
     imgBuffer,
 ) = _C.rasterize_gaussians(*args)
 color = color.clamp(0, 1)
-plt.imshow(color.cpu().numpy().transpose(1, 2, 0))
-plt.show()
+loss = color.mean()
+loss.backward()

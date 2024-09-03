@@ -155,8 +155,9 @@ void runBackward(const std::filesystem::path args_path)
 
 int main()
 {
-    std::filesystem::path args_path = "/home/vy/projects/gaussian-rasterizer/test_data";
-    runForward(args_path / "forward_tensors");
-    runBackward(args_path / "backward_tensors");
+    std::cout<<"hello";
+    // std::filesystem::path args_path = "/home/vy/projects/gaussian-rasterizer/test_data";
+    // runForward(args_path / "forward_tensors");
+    // runBackward(args_path / "backward_tensors");
     return 0;
 }

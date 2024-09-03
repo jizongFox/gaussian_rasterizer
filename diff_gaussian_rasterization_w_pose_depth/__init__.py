@@ -8,12 +8,16 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
-from torch import Tensor
-from dataclasses import dataclass
 from jaxtyping import Float
+from numpy.core.einsumfunc import einsum
+from torch import Tensor
+
 from . import _C  # noqa
 
 
@@ -23,6 +27,15 @@ def cpu_deep_copy_tuple(input_tuple):
         for item in input_tuple
     ]
     return tuple(copied_tensors)
+
+
+def _to_homo(tensor: Float[Tensor, "*batch c"]) -> Float[Tensor, "*batch c+1"]:
+    return torch.cat(
+        [
+            tensor,
+            torch.ones(list(tensor.shape[:-1]) + [1], device="cuda", dtype=torch.float32),
+        ], dim=-1
+    )
 
 
 def rasterize_gaussians(
@@ -41,6 +54,7 @@ def rasterize_gaussians(
     return _RasterizeGaussians.apply(
         means3D,
         means2D,
+        raster_settings.intrinsic_matrix,
         sh,
         colors_precomp,
         opacities,
@@ -59,13 +73,14 @@ class _RasterizeGaussians(torch.autograd.Function):
         ctx,
         means3D,
         means2D,
+        K,
         sh,
         colors_precomp,
         opacities,
         scales,
         rotations,
         cov3Ds_precomp,
-        raster_settings,
+        raster_settings: GaussianRasterizationSettings,
         camera_center,
         camera_pose,
     ):
@@ -125,6 +140,8 @@ class _RasterizeGaussians(torch.autograd.Function):
                 binningBuffer,
                 imgBuffer,
             ) = _C.rasterize_gaussians(*args)
+
+        # save for the K gradient.
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
@@ -231,10 +248,29 @@ class _RasterizeGaussians(torch.autograd.Function):
                 grad_rotations,
                 grad_camera_pose,
             ) = _C.rasterize_gaussians_backward(*args)
+        # compute the gradient with respect to K.
+        with torch.no_grad():
+            visibility_mask = (grad_means2D.norm(dim=-1) > 0).bool()
+            mean3d_cam = (raster_settings.viewmatrix.T @ _to_homo(means3D[visibility_mask]).T).T
+
+            grad_uv_k4: Float[Tensor, "n 2 4"] = torch.zeros(mean3d_cam.shape[0], 2, 4, device="cuda",
+                                                             dtype=torch.float32)
+            grad_uv_k4[:, 0, 0] = mean3d_cam[:, 0] / (mean3d_cam[:, 2] + 1e-4)  # du/dfx
+            grad_uv_k4[:, 1, 1] = mean3d_cam[:, 1] / (mean3d_cam[:, 2] + 1e-4)  # dv/dfy
+            grad_uv_k4[:, 0, 2] = 1  # du/dcx
+            grad_uv_k4[:, 1, 3] = 1  # dv/dcy
+
+            grad_k = torch.einsum("nj,njk->nk", grad_means2D[visibility_mask][:,:2], grad_uv_k4).sum(dim=0)
+            grad_K = torch.zeros(3, 3, device="cuda", dtype=torch.float32)
+            grad_K[0, 0] = grad_k[0]
+            grad_K[1, 1] = grad_k[1]
+            grad_K[0, 2] = grad_k[2]
+            grad_K[1, 2] = grad_k[3]
 
         grads = (
             grad_means3D,
             grad_means2D,
+            grad_K,
             grad_sh,
             grad_colors_precomp,
             grad_opacities,
@@ -269,6 +305,8 @@ class GaussianRasterizationSettings:
     """full projection matrix (proj@world2cam)^{T}"""
     proj_k: Float[Tensor, "4 4"]
     """ opengl projection matrix from camera space to NDC space"""
+    intrinsic_matrix: Float[Tensor, "3 3"]
+    """intrinsic matrix"""
     sh_degree: int
     """degree of spherical harmonics"""
     campos: Float[torch.Tensor, "3"]
@@ -279,9 +317,9 @@ class GaussianRasterizationSettings:
 
 
 class GaussianRasterizer(nn.Module):
-    def __init__(self, raster_settings):
+    def __init__(self, raster_settings: GaussianRasterizationSettings):
         super().__init__()
-        self.raster_settings = raster_settings
+        self.raster_settings: GaussianRasterizationSettings = raster_settings
 
     def markVisible(self, positions):
         # Mark visible points (based on frustum culling for camera) with a boolean

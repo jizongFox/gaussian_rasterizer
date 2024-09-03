@@ -61,8 +61,8 @@ __global__ void checkFrustum(int P,
 	if (idx >= P)
 		return;
 
-	float3 p_view;
-	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, false, p_view);
+	float3 p_view, p_ndc;
+	present[idx] = in_frustum(idx, orig_points, viewmatrix, projmatrix, false, p_view, p_ndc);
 }
 
 // Generates one key/value pair for all Gaussian / tile overlaps. 
@@ -320,6 +320,7 @@ int CudaRasterizer::Rasterizer::forward(
 
 	// Let each tile blend its range of Gaussians independently in parallel
 	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	// printf("title_grid: %d, %d\n", tile_grid.x, tile_grid.y);
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,

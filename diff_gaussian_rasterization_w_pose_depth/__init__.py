@@ -12,8 +12,8 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-from typing import NamedTuple
-
+from dataclasses import dataclass
+from jaxtyping import Float
 from . import _C  # noqa
 
 
@@ -249,19 +249,32 @@ class _RasterizeGaussians(torch.autograd.Function):
         return grads
 
 
-class GaussianRasterizationSettings(NamedTuple):
+@dataclass(kw_only=True, slots=True)
+class GaussianRasterizationSettings:
     image_height: int
+    """image height"""
     image_width: int
+    """image width"""
     tanfovx: float
+    """tan of horizontal field of view"""
     tanfovy: float
-    bg: torch.Tensor
+    """tan of vertical field of view"""
+    bg: Float[Tensor, "3"]
+    """background color"""
     scale_modifier: float
-    viewmatrix: torch.Tensor
-    projmatrix: torch.Tensor
-    proj_k: torch.Tensor
+    """scale modifier"""
+    viewmatrix: Float[Tensor, "4 4"]
+    """transpose of world2cam matrix"""
+    projmatrix: Float[Tensor, "4 4"]
+    """full projection matrix (proj@world2cam)^{T}"""
+    proj_k: Float[Tensor, "4 4"]
+    """ opengl projection matrix from camera space to NDC space"""
     sh_degree: int
-    campos: torch.Tensor
+    """degree of spherical harmonics"""
+    campos: Float[torch.Tensor, "3"]
+    """camera position"""
     prefiltered: bool
+    """not sure of the definition"""
     debug: bool
 
 

@@ -19,8 +19,8 @@ namespace cg = cooperative_groups;
 // coefficients of each Gaussian to a simple RGB color.
 __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
 {
-	// The implementation is loosely based on code for 
-	// "Differentiable Point-Based Radiance Fields for 
+	// The implementation is loosely based on code for
+	// "Differentiable Point-Based Radiance Fields for
 	// Efficient View Synthesis" by Zhang et al. (2022)
 	glm::vec3 pos = means[idx];
 	glm::vec3 dir = pos - campos;
@@ -74,7 +74,7 @@ __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const 
 __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y, float tan_fovx, float tan_fovy, const float* cov3D, const float* viewmatrix)
 {
 	// The following models the steps outlined by equations 29
-	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
+	// and 31 in "EWA Splatting" (Zwicker et al., 2002).
 	// Additionally considers aspect / scaling of viewport.
 	// Transposes used to account for row-/column-major conventions.
 	float3 t = transformPoint4x3(mean, viewmatrix);
@@ -189,18 +189,23 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	tiles_touched[idx] = 0;
 
 	// Perform near culling, quit if outside.
-	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	float3 p_view, p_ndc;
+	// p_view: point in view space
+	// p_ndc: point in normalized device coordinates
+	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view, p_ndc))
+	{
 		return;
+	}
+
 
 	// Transform point by projecting
-	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
-	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2]};
+	// float4 p_hom = transformPoint4x4(p_orig, projmatrix); // in ndc space
+	// float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	float3 p_proj = p_ndc;
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
-	// from scaling and rotation parameters. 
+	// from scaling and rotation parameters.
 	const float* cov3D;
 	if (cov3D_precomp != nullptr)
 	{
@@ -225,12 +230,17 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// Compute extent in screen space (by finding eigenvalues of
 	// 2D covariance matrix). Use extent to compute a bounding rectangle
 	// of screen-space tiles that this Gaussian overlaps with. Quit if
-	// rectangle covers 0 tiles. 
+	// rectangle covers 0 tiles.
 	float mid = 0.5f * (cov.x + cov.z);
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
 	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+	// if (static_cast<int>(idx % 2000) == 0)
+	// {
+	// 	printf("point_image: %f, %f\n", point_image.x, point_image.y);
+	// }
+
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
@@ -256,7 +266,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 }
 
 // Main rasterization method. Collaboratively works on one tile per
-// block, each thread treats one pixel. Alternates between fetching 
+// block, each thread treats one pixel. Alternates between fetching
 // and rasterizing data.
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
@@ -264,10 +274,10 @@ renderCUDA(
 	const uint2* __restrict__ ranges,
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
-	const float2* __restrict__ points_xy_image,
-	const float* __restrict__ features,
-	const float* __restrict__ depths,
-	const float4* __restrict__ conic_opacity,
+	const float2* __restrict__ points_xy_image, // means2D
+	const float* __restrict__ features, //colors
+	const float* __restrict__ depths, // depths
+	const float4* __restrict__ conic_opacity, //conic_opacity
 	float* __restrict__ out_alpha,
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
@@ -282,6 +292,9 @@ renderCUDA(
 	uint2 pix = { pix_min.x + block.thread_index().x, pix_min.y + block.thread_index().y };
 	uint32_t pix_id = W * pix.y + pix.x;
 	float2 pixf = { (float)pix.x, (float)pix.y };
+	// if (pix.x==0){
+	// printf("pix: %d, %d\n", pix.x, pix.y);
+	// }
 
 	// Check if this thread is associated with a valid pixel or outside.
 	bool inside = pix.x < W&& pix.y < H;
@@ -330,9 +343,14 @@ renderCUDA(
 			// Keep track of current position in range
 			contributor++;
 
-			// Resample using conic matrix (cf. "Surface 
+			// Resample using conic matrix (cf. "Surface
 			// Splatting" by Zwicker et al., 2001)
 			float2 xy = collected_xy[j];
+			// if (pixf.x==0.f & pixf.y==0.f)
+			// {
+			// 	printf("xy: %f, %f\n", xy.x, xy.y);
+			// }
+
 			float2 d = { xy.x - pixf.x, xy.y - pixf.y };
 			float4 con_o = collected_conic_opacity[j];
 			float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
@@ -342,11 +360,11 @@ renderCUDA(
 			// Eq. (2) from 3D Gaussian splatting paper.
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix). 
-			float alpha = min(0.99f, con_o.w * exp(power));
+			// Avoid numerical instabilities (see paper appendix).
+			const float alpha = min(0.99f, con_o.w * exp(power));
 			if (alpha < 1.0f / 255.0f)
 				continue;
-			float test_T = T * (1 - alpha);
+			const float test_T = T * (1 - alpha);
 			if (test_T < 0.0001f)
 			{
 				done = true;
@@ -444,7 +462,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		clamped,
 		cov3D_precomp,
 		colors_precomp,
-		viewmatrix, 
+		viewmatrix,
 		projmatrix,
 		cam_pos,
 		W, H,

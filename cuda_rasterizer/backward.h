@@ -66,7 +66,10 @@ namespace BACKWARD
 		float* dL_dsh,
 		glm::vec3* dL_dscale,
 		glm::vec4* dL_drot,
-        float4* dL_dcamerapose);
+		float4* dL_dcamerapose,
+		float4* dL_dK,
+		float3* means3d_cam
+		);
 }
 
 #endif

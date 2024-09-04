@@ -185,6 +185,7 @@ class _RasterizeGaussians(torch.autograd.Function):
         args = (
             raster_settings.bg,
             means3D,
+            mean3d_cam,
             radii,
             colors_precomp,
             scales,
@@ -225,6 +226,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     grad_scales,
                     grad_rotations,
                     grad_camera_pose,
+                    grad_k
                 ) = _C.rasterize_gaussians_backward(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_bw.dump")
@@ -243,22 +245,11 @@ class _RasterizeGaussians(torch.autograd.Function):
                 grad_scales,
                 grad_rotations,
                 grad_camera_pose,
+                grad_k
             ) = _C.rasterize_gaussians_backward(*args)
         # compute the gradient with respect to K.
         with torch.no_grad():
-            grad_uv_k4: Float[Tensor, "n 2 4"] = torch.zeros(
-                mean3d_cam.shape[0], 2, 4, device="cuda", dtype=torch.float32
-            )
-            grad_uv_k4[:, 0, 0] = mean3d_cam[:, 0] / (mean3d_cam[:, 2] + 1e-4)  # du/dfx
-            grad_uv_k4[:, 1, 1] = mean3d_cam[:, 1] / (mean3d_cam[:, 2] + 1e-4)  # dv/dfy
-            grad_uv_k4[:, 0, 2] = 1  # du/dcx
-            grad_uv_k4[:, 1, 3] = 1  # dv/dcy
-
-            grad_k = torch.einsum("nj,njk->nk", grad_means2D[:, :2], grad_uv_k4).sum(
-                dim=0
-            )
-            grad_K = torch.tensor([[grad_k[0],  grad_k[2], 0], [grad_k[1],  grad_k[3], 0], [0, 0, 1]], device="cuda", dtype=torch.float32)
-
+            grad_K = torch.tensor([[grad_k[0][0],   0, grad_k[0][2]], [0,  grad_k[0][1], grad_k[0][3]], [0, 0, 1]], device="cuda", dtype=torch.float32)
 
         grads = (
             grad_means3D,

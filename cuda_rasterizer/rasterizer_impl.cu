@@ -377,8 +377,11 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
-    float* dL_dcamerapose,
-	bool debug)
+	float* dL_dcamerapose,
+	float* dL_dK,
+	float* means3d_cam,
+	bool debug
+	)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
@@ -449,5 +452,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dsh,
 		(glm::vec3*)dL_dscale,
 		(glm::vec4*)dL_drot,
-		(float4*)dL_dcamerapose), debug)
+		(float4*)dL_dcamerapose,
+		(float4*)dL_dK,
+		(float3*)means3d_cam
+		), debug)
 }

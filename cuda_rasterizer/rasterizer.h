@@ -89,7 +89,9 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
-            float* dL_dcamerapose,
+			float* dL_dcamerapose,
+			float* dL_dK,
+			float* means3d_cam,
 			bool debug);
 	};
 };

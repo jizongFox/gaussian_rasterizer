@@ -394,7 +394,9 @@ __global__ void preprocessCUDA(
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
-    float4* dL_dcamerapose
+    float4* dL_dcamerapose,
+    float4* dL_dK,
+    float3* means3d_cam
     )
 {
 	auto idx = cg::this_grid().thread_rank();
@@ -402,6 +404,7 @@ __global__ void preprocessCUDA(
 		return;
 
 	float3 m = means[idx];
+	float3 m_cam = means3d_cam[idx];
 
 	// Taking care of gradients from the screenspace points
 	float4 m_hom = transformPoint4x4(m, proj); // in ndc space
@@ -421,9 +424,9 @@ __global__ void preprocessCUDA(
 	dL_dmeans[idx] += dL_dmean;
 
 	// the w must be equal to 1 for view^T * [x,y,z,1]
-	float3 m_view = transformPoint4x3(m, view);
+	// float3 m_view = transformPoint4x3(m, view);
 	// in camera space
-	
+
 	// Compute loss gradient w.r.t. 3D means due to gradients of depth
 	// from rendering procedure
 	glm::vec3 dL_dmean2;
@@ -481,6 +484,13 @@ __global__ void preprocessCUDA(
     atomicAdd(&dL_dcamerapose[1].z, dL_ddepth[idx] * m.y);
     atomicAdd(&dL_dcamerapose[2].z, dL_ddepth[idx] * m.z);
     atomicAdd(&dL_dcamerapose[3].z, dL_ddepth[idx] * 1.0f);
+
+	float3 cur_dL_dmean2D = dL_dmean2D[idx];
+
+	atomicAdd(&dL_dK[0].x, cur_dL_dmean2D.x* (m_cam.x / (m_cam.z + 0.000001f)));//fx
+	atomicAdd(&dL_dK[0].y, cur_dL_dmean2D.y* (m_cam.y / (m_cam.z + 0.000001f))); //fy
+	atomicAdd(&dL_dK[0].z, cur_dL_dmean2D.x); //cx
+	atomicAdd(&dL_dK[0].w, cur_dL_dmean2D.y); //cx
 }
 
 // Backward version of the rendering procedure.
@@ -530,7 +540,7 @@ renderCUDA(
 	__shared__ float collected_depths[BLOCK_SIZE];
 
 	// In the forward, we stored the final value for T, the
-	// product of all (1 - alpha) factors. 
+	// product of all (1 - alpha) factors.
 	const float T_final = inside ? (1 - accum_alphas[pix_id]) : 0;
 	float T = T_final;
 
@@ -688,12 +698,14 @@ void BACKWARD::preprocess(
 	float* dL_dsh,
 	glm::vec3* dL_dscale,
 	glm::vec4* dL_drot,
-    float4* dL_dcamerapose)
+	float4* dL_dcamerapose,
+	float4* dL_dK,
+	float3* means3d_cam)
 {
-	// Propagate gradients for the path of 2D conic matrix computation. 
-	// Somewhat long, thus it is its own kernel rather than being part of 
+	// Propagate gradients for the path of 2D conic matrix computation.
+	// Somewhat long, thus it is its own kernel rather than being part of
 	// "preprocess". When done, loss gradient w.r.t. 3D means has been
-	// modified and gradient w.r.t. 3D covariance matrix has been computed.	
+	// modified and gradient w.r.t. 3D covariance matrix has been computed.
 	computeCov2DCUDA <<<(P + 255) / 256, 256 >>> (
 		P,
 		means3D,
@@ -733,7 +745,10 @@ void BACKWARD::preprocess(
 		dL_dsh,
 		dL_dscale,
 		dL_drot,
-        dL_dcamerapose);
+        dL_dcamerapose,
+        dL_dK,
+        means3d_cam
+        );
 }
 
 void BACKWARD::render(

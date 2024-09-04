@@ -21,7 +21,9 @@ args = [x.cuda() if isinstance(x, Tensor) else x for x in args]
     geomBuffer,
     binningBuffer,
     imgBuffer,
+    mean3d_camera,
 ) = _C.rasterize_gaussians(*args)
+
 color = color.clamp(0, 1)
 loss = color.mean()
 loss.backward()

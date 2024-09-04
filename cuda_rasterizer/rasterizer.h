@@ -52,6 +52,7 @@ namespace CudaRasterizer
 			float* out_depth,
 			float* out_alpha,
 			int* radii = nullptr,
+			float* out_mean3d_cam = nullptr,
 			bool debug = false);
 
 		static void backward(

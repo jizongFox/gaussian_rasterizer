@@ -15,7 +15,6 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from jaxtyping import Float
-from numpy.core.einsumfunc import einsum
 from torch import Tensor
 
 from . import _C  # noqa
@@ -29,13 +28,6 @@ def cpu_deep_copy_tuple(input_tuple):
     return tuple(copied_tensors)
 
 
-def _to_homo(tensor: Float[Tensor, "*batch c"]) -> Float[Tensor, "*batch c+1"]:
-    return torch.cat(
-        [
-            tensor,
-            torch.ones(list(tensor.shape[:-1]) + [1], device="cuda", dtype=torch.float32),
-        ], dim=-1
-    )
 
 
 def rasterize_gaussians(
@@ -122,6 +114,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                     geomBuffer,
                     binningBuffer,
                     imgBuffer,
+                    mean3d_cam,
                 ) = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
@@ -139,6 +132,7 @@ class _RasterizeGaussians(torch.autograd.Function):
                 geomBuffer,
                 binningBuffer,
                 imgBuffer,
+                mean3d_cam,
             ) = _C.rasterize_gaussians(*args)
 
         # save for the K gradient.
@@ -160,11 +154,12 @@ class _RasterizeGaussians(torch.autograd.Function):
             camera_center,
             camera_pose,
             alpha,
+            mean3d_cam,
         )
-        return color, depth, alpha, radii
+        return color, depth, alpha, radii, mean3d_cam
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_out_depth, grad_out_alpha, _):
+    def backward(ctx, grad_out_color, grad_out_depth, grad_out_alpha, _, __):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
@@ -183,6 +178,7 @@ class _RasterizeGaussians(torch.autograd.Function):
             camera_center,
             camera_pose,
             alpha,
+            mean3d_cam,
         ) = ctx.saved_tensors
 
         # Restructure args as C++ method expects them
@@ -250,22 +246,19 @@ class _RasterizeGaussians(torch.autograd.Function):
             ) = _C.rasterize_gaussians_backward(*args)
         # compute the gradient with respect to K.
         with torch.no_grad():
-            visibility_mask = (grad_means2D.norm(dim=-1) > 0).bool()
-            mean3d_cam = (raster_settings.viewmatrix.T @ _to_homo(means3D[visibility_mask]).T).T
-
-            grad_uv_k4: Float[Tensor, "n 2 4"] = torch.zeros(mean3d_cam.shape[0], 2, 4, device="cuda",
-                                                             dtype=torch.float32)
+            grad_uv_k4: Float[Tensor, "n 2 4"] = torch.zeros(
+                mean3d_cam.shape[0], 2, 4, device="cuda", dtype=torch.float32
+            )
             grad_uv_k4[:, 0, 0] = mean3d_cam[:, 0] / (mean3d_cam[:, 2] + 1e-4)  # du/dfx
             grad_uv_k4[:, 1, 1] = mean3d_cam[:, 1] / (mean3d_cam[:, 2] + 1e-4)  # dv/dfy
             grad_uv_k4[:, 0, 2] = 1  # du/dcx
             grad_uv_k4[:, 1, 3] = 1  # dv/dcy
 
-            grad_k = torch.einsum("nj,njk->nk", grad_means2D[visibility_mask][:,:2], grad_uv_k4).sum(dim=0)
-            grad_K = torch.zeros(3, 3, device="cuda", dtype=torch.float32)
-            grad_K[0, 0] = grad_k[0]
-            grad_K[1, 1] = grad_k[1]
-            grad_K[0, 2] = grad_k[2]
-            grad_K[1, 2] = grad_k[3]
+            grad_k = torch.einsum("nj,njk->nk", grad_means2D[:, :2], grad_uv_k4).sum(
+                dim=0
+            )
+            grad_K = torch.tensor([[grad_k[0],  grad_k[2], 0], [grad_k[1],  grad_k[3], 0], [0, 0, 1]], device="cuda", dtype=torch.float32)
+
 
         grads = (
             grad_means3D,

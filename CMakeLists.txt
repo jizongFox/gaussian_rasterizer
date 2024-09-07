@@ -25,7 +25,7 @@ set(CUDA_SOURCES
         rasterize_points.cu
 )
 
-#include_directories("/usr/local/cuda/include")
+include_directories("/usr/local/cuda/include")
 #include_directories(${PYTHON_INCLUDE_DIR})
 
 add_executable(rasterizer main.cpp ${CUDA_SOURCES})
